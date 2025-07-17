@@ -6,7 +6,6 @@ import {
   ChatBubbleLeftEllipsisIcon,
   CpuChipIcon,
   DocumentTextIcon,
-  Cog6ToothIcon,
   ArrowRightOnRectangleIcon
 } from '@heroicons/react/24/outline'
 import { useAuthStore } from '@/stores/authStore'
