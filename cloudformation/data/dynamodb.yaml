@@ -1,0 +1,306 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AgentDev Platform - DynamoDB Tables'
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name
+
+  ProjectName:
+    Type: String
+    Description: Project name used for resource naming
+
+Resources:
+  ProjectsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectName}-${Environment}-projects'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: project_id
+          AttributeType: S
+        - AttributeName: user_id
+          AttributeType: S
+        - AttributeName: created_at
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+      KeySchema:
+        - AttributeName: project_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: user-projects-index
+          KeySchema:
+            - AttributeName: user_id
+              KeyType: HASH
+            - AttributeName: created_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: status-index
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+            - AttributeName: created_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-projects'
+
+  AgentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectName}-${Environment}-agents'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: agent_id
+          AttributeType: S
+        - AttributeName: project_id
+          AttributeType: S
+        - AttributeName: agent_type
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+      KeySchema:
+        - AttributeName: agent_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: project-agents-index
+          KeySchema:
+            - AttributeName: project_id
+              KeyType: HASH
+            - AttributeName: agent_type
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: agent-status-index
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+            - AttributeName: agent_type
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-agents'
+
+  MessagesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectName}-${Environment}-messages'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: channel_id
+          AttributeType: S
+        - AttributeName: message_id
+          AttributeType: S
+        - AttributeName: sender_id
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: channel_id
+          KeyType: HASH
+        - AttributeName: message_id
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: sender-messages-index
+          KeySchema:
+            - AttributeName: sender_id
+              KeyType: HASH
+            - AttributeName: timestamp
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-messages'
+
+  TasksTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectName}-${Environment}-tasks'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: task_id
+          AttributeType: S
+        - AttributeName: project_id
+          AttributeType: S
+        - AttributeName: assigned_agent_id
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+        - AttributeName: created_at
+          AttributeType: S
+      KeySchema:
+        - AttributeName: task_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: project-tasks-index
+          KeySchema:
+            - AttributeName: project_id
+              KeyType: HASH
+            - AttributeName: created_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: agent-tasks-index
+          KeySchema:
+            - AttributeName: assigned_agent_id
+              KeyType: HASH
+            - AttributeName: status
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-tasks'
+
+  ChannelsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectName}-${Environment}-channels'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: channel_id
+          AttributeType: S
+        - AttributeName: project_id
+          AttributeType: S
+        - AttributeName: channel_type
+          AttributeType: S
+      KeySchema:
+        - AttributeName: channel_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: project-channels-index
+          KeySchema:
+            - AttributeName: project_id
+              KeyType: HASH
+            - AttributeName: channel_type
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-channels'
+
+  ArtifactsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectName}-${Environment}-artifacts'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: artifact_id
+          AttributeType: S
+        - AttributeName: project_id
+          AttributeType: S
+        - AttributeName: artifact_type
+          AttributeType: S
+        - AttributeName: created_at
+          AttributeType: S
+      KeySchema:
+        - AttributeName: artifact_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: project-artifacts-index
+          KeySchema:
+            - AttributeName: project_id
+              KeyType: HASH
+            - AttributeName: created_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: artifact-type-index
+          KeySchema:
+            - AttributeName: artifact_type
+              KeyType: HASH
+            - AttributeName: created_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-artifacts'
+
+  WebSocketConnectionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectName}-${Environment}-ws-connections'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: connection_id
+          AttributeType: S
+        - AttributeName: user_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: connection_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: user-connections-index
+          KeySchema:
+            - AttributeName: user_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-ws-connections'
+
+Outputs:
+  ProjectsTableName:
+    Description: Projects table name
+    Value: !Ref ProjectsTable
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-projects-table'
+
+  AgentsTableName:
+    Description: Agents table name
+    Value: !Ref AgentsTable
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-agents-table'
+
+  MessagesTableName:
+    Description: Messages table name
+    Value: !Ref MessagesTable
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-messages-table'
+
+  TasksTableName:
+    Description: Tasks table name
+    Value: !Ref TasksTable
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-tasks-table'
+
+  ChannelsTableName:
+    Description: Channels table name
+    Value: !Ref ChannelsTable
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-channels-table'
+
+  ArtifactsTableName:
+    Description: Artifacts table name
+    Value: !Ref ArtifactsTable
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-artifacts-table'
+
+  WebSocketConnectionsTableName:
+    Description: WebSocket connections table name
+    Value: !Ref WebSocketConnectionsTable
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-ws-connections-table'

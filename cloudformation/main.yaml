@@ -1,0 +1,131 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AgentDev Platform - Main Stack'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name
+
+  ProjectName:
+    Type: String
+    Default: agentdev
+    Description: Project name used for resource naming
+
+  BedrockRegion:
+    Type: String
+    Default: us-east-1
+    Description: AWS region for Bedrock services
+
+Resources:
+  NetworkStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./network/vpc.yaml
+      Parameters:
+        Environment: !Ref Environment
+        ProjectName: !Ref ProjectName
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  SecurityStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./security/iam.yaml
+      Parameters:
+        Environment: !Ref Environment
+        ProjectName: !Ref ProjectName
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  DataStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./data/dynamodb.yaml
+      Parameters:
+        Environment: !Ref Environment
+        ProjectName: !Ref ProjectName
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  S3Stack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./data/s3.yaml
+      Parameters:
+        Environment: !Ref Environment
+        ProjectName: !Ref ProjectName
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  CognitoStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./security/cognito.yaml
+      Parameters:
+        Environment: !Ref Environment
+        ProjectName: !Ref ProjectName
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+Outputs:
+  VPCId:
+    Description: VPC ID
+    Value: !GetAtt NetworkStack.Outputs.VPCId
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-vpc-id'
+
+  PublicSubnet1Id:
+    Description: Public Subnet 1 ID
+    Value: !GetAtt NetworkStack.Outputs.PublicSubnet1Id
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-public-subnet-1'
+
+  PublicSubnet2Id:
+    Description: Public Subnet 2 ID
+    Value: !GetAtt NetworkStack.Outputs.PublicSubnet2Id
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-public-subnet-2'
+
+  PrivateSubnet1Id:
+    Description: Private Subnet 1 ID
+    Value: !GetAtt NetworkStack.Outputs.PrivateSubnet1Id
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-private-subnet-1'
+
+  PrivateSubnet2Id:
+    Description: Private Subnet 2 ID
+    Value: !GetAtt NetworkStack.Outputs.PrivateSubnet2Id
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-private-subnet-2'
+
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !GetAtt CognitoStack.Outputs.UserPoolId
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-user-pool-id'
+
+  UserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value: !GetAtt CognitoStack.Outputs.UserPoolClientId
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-user-pool-client-id'

@@ -1,0 +1,262 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AgentDev Platform - Bedrock Agents'
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name
+
+  ProjectName:
+    Type: String
+    Description: Project name used for resource naming
+
+  KnowledgeBaseBucket:
+    Type: String
+    Description: S3 bucket for knowledge base documents
+
+Resources:
+  # IAM Role for Bedrock Agents
+  BedrockAgentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-bedrock-agent-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: BedrockAgentPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'bedrock:InvokeModel'
+                  - 'bedrock:InvokeModelWithResponseStream'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:ListBucket'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${KnowledgeBaseBucket}'
+                  - !Sub 'arn:aws:s3:::${KnowledgeBaseBucket}/*'
+              - Effect: Allow
+                Action:
+                  - 'lambda:InvokeFunction'
+                Resource:
+                  - !GetAtt PMAgentActionGroup.Arn
+                  - !GetAtt ArchitectAgentActionGroup.Arn
+                  - !GetAtt SecurityAgentActionGroup.Arn
+
+  # Knowledge Base
+  AgentKnowledgeBase:
+    Type: AWS::Bedrock::KnowledgeBase
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-knowledge-base'
+      Description: 'Knowledge base for AgentDev Platform agents'
+      RoleArn: !GetAtt BedrockAgentRole.Arn
+      KnowledgeBaseConfiguration:
+        Type: VECTOR
+        VectorKnowledgeBaseConfiguration:
+          EmbeddingModelArn: 'arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v1'
+      StorageConfiguration:
+        Type: OPENSEARCH_SERVERLESS
+        OpensearchServerlessConfiguration:
+          CollectionArn: !GetAtt OpenSearchCollection.Arn
+          VectorIndexName: 'agentdev-index'
+          FieldMapping:
+            VectorField: 'vector'
+            TextField: 'text'
+            MetadataField: 'metadata'
+
+  # OpenSearch Serverless Collection for Knowledge Base
+  OpenSearchCollection:
+    Type: AWS::OpenSearchServerless::Collection
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-collection'
+      Type: VECTORSEARCH
+      Description: 'Vector search collection for AgentDev knowledge base'
+
+  # Data Source for Knowledge Base
+  KnowledgeBaseDataSource:
+    Type: AWS::Bedrock::DataSource
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-datasource'
+      Description: 'S3 data source for knowledge base'
+      KnowledgeBaseId: !Ref AgentKnowledgeBase
+      DataSourceConfiguration:
+        Type: S3
+        S3Configuration:
+          BucketArn: !Sub 'arn:aws:s3:::${KnowledgeBaseBucket}'
+          InclusionPrefixes:
+            - 'knowledge-base/'
+
+  # PM Agent Action Group Lambda
+  PMAgentActionGroup:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-pm-agent-actions'
+      Runtime: python3.11
+      Handler: pm_actions.lambda_handler
+      Role: !Sub 
+        - 'arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-${Environment}-lambda-execution-role'
+        - ProjectName: !Ref ProjectName
+          Environment: !Ref Environment
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps({'message': 'PM Agent Action executed'})
+              }
+      Timeout: 30
+
+  # Architect Agent Action Group Lambda
+  ArchitectAgentActionGroup:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-architect-agent-actions'
+      Runtime: python3.11
+      Handler: architect_actions.lambda_handler
+      Role: !Sub 
+        - 'arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-${Environment}-lambda-execution-role'
+        - ProjectName: !Ref ProjectName
+          Environment: !Ref Environment
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps({'message': 'Architect Agent Action executed'})
+              }
+      Timeout: 30
+
+  # Security Agent Action Group Lambda
+  SecurityAgentActionGroup:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-security-agent-actions'
+      Runtime: python3.11
+      Handler: security_actions.lambda_handler
+      Role: !Sub 
+        - 'arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-${Environment}-lambda-execution-role'
+        - ProjectName: !Ref ProjectName
+          Environment: !Ref Environment
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps({'message': 'Security Agent Action executed'})
+              }
+      Timeout: 30
+
+  # PM Agent
+  PMAgent:
+    Type: AWS::Bedrock::Agent
+    Properties:
+      AgentName: !Sub '${ProjectName}-${Environment}-pm-agent'
+      Description: 'Project Manager Agent for AgentDev Platform'
+      FoundationModel: 'anthropic.claude-3-sonnet-20240229-v1:0'
+      Instruction: |
+        You are a Project Manager Agent for the AgentDev Platform. Your role is to:
+        1. Create and manage project plans
+        2. Assess and mitigate risks
+        3. Track project progress
+        4. Coordinate team activities
+        5. Communicate with stakeholders
+        
+        Always provide structured, actionable recommendations and maintain a professional tone.
+      AgentResourceRoleArn: !GetAtt BedrockAgentRole.Arn
+      KnowledgeBases:
+        - KnowledgeBaseId: !Ref AgentKnowledgeBase
+          Description: 'Project management knowledge base'
+      ActionGroups:
+        - ActionGroupName: 'project-management-actions'
+          Description: 'Actions for project management tasks'
+          ActionGroupExecutor:
+            Lambda: !GetAtt PMAgentActionGroup.Arn
+
+  # Architect Agent
+  ArchitectAgent:
+    Type: AWS::Bedrock::Agent
+    Properties:
+      AgentName: !Sub '${ProjectName}-${Environment}-architect-agent'
+      Description: 'Software Architect Agent for AgentDev Platform'
+      FoundationModel: 'anthropic.claude-3-sonnet-20240229-v1:0'
+      Instruction: |
+        You are a Software Architect Agent for the AgentDev Platform. Your role is to:
+        1. Design system architecture
+        2. Select appropriate technologies
+        3. Review architectural decisions
+        4. Ensure scalability and performance
+        5. Document architectural patterns
+        
+        Focus on best practices, maintainability, and technical excellence.
+      AgentResourceRoleArn: !GetAtt BedrockAgentRole.Arn
+      KnowledgeBases:
+        - KnowledgeBaseId: !Ref AgentKnowledgeBase
+          Description: 'Software architecture knowledge base'
+      ActionGroups:
+        - ActionGroupName: 'architecture-actions'
+          Description: 'Actions for architecture tasks'
+          ActionGroupExecutor:
+            Lambda: !GetAtt ArchitectAgentActionGroup.Arn
+
+  # Security Agent
+  SecurityAgent:
+    Type: AWS::Bedrock::Agent
+    Properties:
+      AgentName: !Sub '${ProjectName}-${Environment}-security-agent'
+      Description: 'Security Agent for AgentDev Platform'
+      FoundationModel: 'anthropic.claude-3-sonnet-20240229-v1:0'
+      Instruction: |
+        You are a Security Agent for the AgentDev Platform. Your role is to:
+        1. Conduct security reviews
+        2. Identify vulnerabilities
+        3. Recommend security measures
+        4. Ensure compliance
+        5. Monitor security best practices
+        
+        Prioritize security without compromising functionality.
+      AgentResourceRoleArn: !GetAtt BedrockAgentRole.Arn
+      KnowledgeBases:
+        - KnowledgeBaseId: !Ref AgentKnowledgeBase
+          Description: 'Security knowledge base'
+      ActionGroups:
+        - ActionGroupName: 'security-actions'
+          Description: 'Actions for security tasks'
+          ActionGroupExecutor:
+            Lambda: !GetAtt SecurityAgentActionGroup.Arn
+
+Outputs:
+  PMAgentId:
+    Description: PM Agent ID
+    Value: !Ref PMAgent
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-pm-agent-id'
+
+  ArchitectAgentId:
+    Description: Architect Agent ID
+    Value: !Ref ArchitectAgent
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-architect-agent-id'
+
+  SecurityAgentId:
+    Description: Security Agent ID
+    Value: !Ref SecurityAgent
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-security-agent-id'
+
+  KnowledgeBaseId:
+    Description: Knowledge Base ID
+    Value: !Ref AgentKnowledgeBase
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-knowledge-base-id'
