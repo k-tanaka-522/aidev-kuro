@@ -9,7 +9,7 @@ interface Agent {
 }
 
 function AgentManagement() {
-  const [agents, setAgents] = useState<Agent[]>([])
+  const [agents] = useState<Agent[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {

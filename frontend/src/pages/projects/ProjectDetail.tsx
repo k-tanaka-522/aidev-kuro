@@ -11,7 +11,7 @@ interface Project {
 
 function ProjectDetail() {
   const { id } = useParams<{ id: string }>()
-  const [project, setProject] = useState<Project | null>(null)
+  const [project] = useState<Project | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {

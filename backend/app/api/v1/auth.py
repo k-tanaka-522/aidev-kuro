@@ -29,12 +29,15 @@ async def login(login_data: LoginRequest):
     """Login with email and password"""
     try:
         # Mock authentication - in production, use Cognito
-        if login_data.email == "admin@example.com" and login_data.password == "password":
+        if (
+            login_data.email == "admin@example.com"
+            and login_data.password == "password"
+        ):
             # Mock JWT token
             mock_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyXzEyMyIsImVtYWlsIjoiYWRtaW5AZXhhbXBsZS5jb20iLCJuYW1lIjoiQWRtaW4gVXNlciIsInJvbGUiOiJhZG1pbiJ9.mock"
-            
+
             logger.info("User logged in", email=login_data.email)
-            
+
             return LoginResponse(
                 access_token=mock_token,
                 expires_in=1800,  # 30 minutes

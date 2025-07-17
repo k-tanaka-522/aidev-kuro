@@ -10,7 +10,7 @@ interface Project {
 }
 
 function ProjectList() {
-  const [projects, setProjects] = useState<Project[]>([])
+  const [projects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
