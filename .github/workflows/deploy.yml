@@ -1,0 +1,187 @@
+name: Deploy to Debug Environment
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+
+jobs:
+  build-and-deploy:
+    name: Build and Deploy to Debug Environment
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+        
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+      
+    - name: Create ECR repositories if they don't exist
+      run: |
+        aws ecr describe-repositories --repository-names agentdev-backend || \
+        aws ecr create-repository --repository-name agentdev-backend
+        
+        aws ecr describe-repositories --repository-names agentdev-frontend || \
+        aws ecr create-repository --repository-name agentdev-frontend
+        
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Build and push backend image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./backend
+        push: true
+        tags: |
+          ${{ env.ECR_REGISTRY }}/agentdev-backend:${{ github.sha }}
+          ${{ env.ECR_REGISTRY }}/agentdev-backend:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: Build and push frontend image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./frontend
+        push: true
+        tags: |
+          ${{ env.ECR_REGISTRY }}/agentdev-frontend:${{ github.sha }}
+          ${{ env.ECR_REGISTRY }}/agentdev-frontend:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: Create minimal debug infrastructure
+      run: |
+        # Create a simple VPC and security group for debugging
+        VPC_ID=$(aws ec2 create-vpc --cidr-block 10.0.0.0/16 --query 'Vpc.VpcId' --output text)
+        aws ec2 create-tags --resources $VPC_ID --tags Key=Name,Value=agentdev-debug-vpc
+        
+        # Create internet gateway
+        IGW_ID=$(aws ec2 create-internet-gateway --query 'InternetGateway.InternetGatewayId' --output text)
+        aws ec2 attach-internet-gateway --vpc-id $VPC_ID --internet-gateway-id $IGW_ID
+        
+        # Create subnet
+        SUBNET_ID=$(aws ec2 create-subnet --vpc-id $VPC_ID --cidr-block 10.0.1.0/24 --query 'Subnet.SubnetId' --output text)
+        aws ec2 create-tags --resources $SUBNET_ID --tags Key=Name,Value=agentdev-debug-subnet
+        
+        # Create route table
+        RT_ID=$(aws ec2 create-route-table --vpc-id $VPC_ID --query 'RouteTable.RouteTableId' --output text)
+        aws ec2 create-route --route-table-id $RT_ID --destination-cidr-block 0.0.0.0/0 --gateway-id $IGW_ID
+        aws ec2 associate-route-table --subnet-id $SUBNET_ID --route-table-id $RT_ID
+        
+        # Create security group
+        SG_ID=$(aws ec2 create-security-group --group-name agentdev-debug-sg --description "Debug security group" --vpc-id $VPC_ID --query 'GroupId' --output text)
+        aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 80 --cidr 0.0.0.0/0
+        aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 8000 --cidr 0.0.0.0/0
+        
+        # Store values for later use
+        echo "VPC_ID=$VPC_ID" >> $GITHUB_ENV
+        echo "SUBNET_ID=$SUBNET_ID" >> $GITHUB_ENV
+        echo "SG_ID=$SG_ID" >> $GITHUB_ENV
+        
+    - name: Create ECS cluster and task definition
+      run: |
+        # Create ECS cluster
+        aws ecs create-cluster --cluster-name agentdev-debug || echo "Cluster already exists"
+        
+        # Create task definition
+        cat > task-definition.json << EOF
+        {
+          "family": "agentdev-debug",
+          "networkMode": "awsvpc",
+          "requiresCompatibilities": ["FARGATE"],
+          "cpu": "256",
+          "memory": "512",
+          "executionRoleArn": "arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/ecsTaskExecutionRole",
+          "containerDefinitions": [
+            {
+              "name": "backend",
+              "image": "${{ env.ECR_REGISTRY }}/agentdev-backend:${{ github.sha }}",
+              "portMappings": [
+                {
+                  "containerPort": 8000,
+                  "protocol": "tcp"
+                }
+              ],
+              "essential": true,
+              "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                  "awslogs-group": "/ecs/agentdev-debug",
+                  "awslogs-region": "${{ env.AWS_REGION }}",
+                  "awslogs-stream-prefix": "ecs"
+                }
+              }
+            }
+          ]
+        }
+        EOF
+        
+        # Create CloudWatch log group
+        aws logs create-log-group --log-group-name /ecs/agentdev-debug || echo "Log group already exists"
+        
+        # Register task definition
+        aws ecs register-task-definition --cli-input-json file://task-definition.json
+        
+    - name: Deploy to ECS
+      run: |
+        # Create or update ECS service
+        aws ecs create-service \
+          --cluster agentdev-debug \
+          --service-name agentdev-debug-service \
+          --task-definition agentdev-debug:1 \
+          --desired-count 1 \
+          --launch-type FARGATE \
+          --network-configuration "awsvpcConfiguration={subnets=[$SUBNET_ID],securityGroups=[$SG_ID],assignPublicIp=ENABLED}" \
+          || aws ecs update-service \
+            --cluster agentdev-debug \
+            --service agentdev-debug-service \
+            --task-definition agentdev-debug:1 \
+            --desired-count 1
+        
+        # Wait for service to be stable
+        echo "Waiting for service to be stable..."
+        aws ecs wait services-stable --cluster agentdev-debug --services agentdev-debug-service
+        
+    - name: Get deployment info
+      run: |
+        # Get task IP
+        TASK_ARN=$(aws ecs list-tasks --cluster agentdev-debug --service-name agentdev-debug-service --query 'taskArns[0]' --output text)
+        TASK_IP=$(aws ecs describe-tasks --cluster agentdev-debug --tasks $TASK_ARN --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text | xargs -I {} aws ec2 describe-network-interfaces --network-interface-ids {} --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
+        
+        echo "🚀 Deployment completed!"
+        echo "Backend API: http://$TASK_IP:8000"
+        echo "Health check: http://$TASK_IP:8000/health"
+        echo "API docs: http://$TASK_IP:8000/docs"
+        
+    - name: Run smoke tests
+      run: |
+        TASK_ARN=$(aws ecs list-tasks --cluster agentdev-debug --service-name agentdev-debug-service --query 'taskArns[0]' --output text)
+        TASK_IP=$(aws ecs describe-tasks --cluster agentdev-debug --tasks $TASK_ARN --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text | xargs -I {} aws ec2 describe-network-interfaces --network-interface-ids {} --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
+        
+        echo "Testing deployment at http://$TASK_IP:8000"
+        
+        # Wait for service to be ready
+        for i in {1..30}; do
+          if curl -f http://$TASK_IP:8000/health; then
+            echo "✅ Health check passed"
+            break
+          fi
+          echo "⏳ Waiting for service to be ready... ($i/30)"
+          sleep 10
+        done
+        
+        # Test API endpoints
+        echo "Testing API endpoints..."
+        curl -f http://$TASK_IP:8000/docs || echo "⚠️ API docs not accessible"
