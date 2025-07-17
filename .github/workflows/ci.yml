@@ -1,0 +1,225 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  AWS_REGION: us-east-1
+  PYTHON_VERSION: 3.11
+  NODE_VERSION: 18
+
+jobs:
+  backend-test:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: Install dependencies
+      run: |
+        cd backend
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest-cov black flake8 mypy
+        
+    - name: Code formatting check
+      run: |
+        cd backend
+        black --check --diff .
+        
+    - name: Linting
+      run: |
+        cd backend
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+        
+    - name: Type checking
+      run: |
+        cd backend
+        mypy app --ignore-missing-imports
+        
+    - name: Run tests
+      run: |
+        cd backend
+        pytest --cov=app --cov-report=xml --cov-report=html tests/
+        
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: backend/coverage.xml
+        flags: backend
+        name: backend-coverage
+
+  frontend-test:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+        
+    - name: Install dependencies
+      run: |
+        cd frontend
+        npm ci
+        
+    - name: Type checking
+      run: |
+        cd frontend
+        npm run type-check
+        
+    - name: Linting
+      run: |
+        cd frontend
+        npm run lint
+        
+    - name: Run tests
+      run: |
+        cd frontend
+        npm run test:coverage
+        
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: frontend/coverage/lcov.info
+        flags: frontend
+        name: frontend-coverage
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  cloudformation-validation:
+    name: CloudFormation Validation
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+        
+    - name: Validate CloudFormation templates
+      run: |
+        for template in cloudformation/*.yaml cloudformation/*/*.yaml; do
+          echo "Validating $template"
+          aws cloudformation validate-template --template-body file://$template
+        done
+        
+    - name: CloudFormation Linting
+      uses: scottbrenner/cfn-lint-action@v2
+      with:
+        file: cloudformation/
+
+  build-docker:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    needs: [backend-test, frontend-test]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Build backend image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./backend
+        push: false
+        tags: agentdev-backend:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: Build frontend image
+      run: |
+        cd frontend
+        npm ci
+        npm run build
+        docker build -t agentdev-frontend:latest .
+
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [build-docker]
+    
+    services:
+      localstack:
+        image: localstack/localstack:latest
+        env:
+          SERVICES: dynamodb,s3
+          DEBUG: 1
+        ports:
+          - 4566:4566
+          
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Install dependencies
+      run: |
+        cd backend
+        pip install -r requirements.txt
+        pip install pytest-asyncio boto3
+        
+    - name: Wait for LocalStack
+      run: |
+        timeout 60 bash -c 'until curl -f http://localhost:4566/_localstack/health; do sleep 2; done'
+        
+    - name: Run integration tests
+      env:
+        AWS_ACCESS_KEY_ID: test
+        AWS_SECRET_ACCESS_KEY: test
+        AWS_DEFAULT_REGION: us-east-1
+        AWS_ENDPOINT_URL: http://localhost:4566
+      run: |
+        cd backend
+        pytest tests/integration/ -v

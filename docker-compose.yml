@@ -1,0 +1,115 @@
+version: '3.8'
+
+services:
+  # DynamoDB Local for development
+  dynamodb-local:
+    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath ./data"
+    image: "amazon/dynamodb-local:latest"
+    container_name: agentdev-dynamodb-local
+    ports:
+      - "8000:8000"
+    volumes:
+      - "./docker/dynamodb:/home/dynamodblocal/data"
+    working_dir: /home/dynamodblocal
+    networks:
+      - agentdev-network
+
+  # Backend service
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: agentdev-backend
+    ports:
+      - "8001:8000"
+    environment:
+      - DEBUG=true
+      - ENVIRONMENT=dev
+      - AWS_ENDPOINT_URL=http://dynamodb-local:8000
+      - AWS_ACCESS_KEY_ID=dummy
+      - AWS_SECRET_ACCESS_KEY=dummy
+      - AWS_DEFAULT_REGION=us-east-1
+    volumes:
+      - ./backend:/app
+      - /app/venv
+    depends_on:
+      - dynamodb-local
+    networks:
+      - agentdev-network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Frontend service
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: agentdev-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8001
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    networks:
+      - agentdev-network
+    command: npm run dev
+
+  # Redis for caching (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: agentdev-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - agentdev-network
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+
+  # Nginx reverse proxy
+  nginx:
+    image: nginx:alpine
+    container_name: agentdev-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - agentdev-network
+
+  # LocalStack for AWS services simulation
+  localstack:
+    image: localstack/localstack:latest
+    container_name: agentdev-localstack
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=s3,lambda,apigateway,iam,sts
+      - DEBUG=1
+      - DATA_DIR=/tmp/localstack/data
+      - LAMBDA_EXECUTOR=docker
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "./docker/localstack:/tmp/localstack"
+    networks:
+      - agentdev-network
+
+volumes:
+  redis-data:
+  dynamodb-data:
+
+networks:
+  agentdev-network:
+    driver: bridge
